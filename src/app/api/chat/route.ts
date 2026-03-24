@@ -50,9 +50,9 @@ export async function POST(req: NextRequest) {
         "Content-Type": "text/plain; charset=utf-8",
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error in chat API:", error);
-    const errorMessage = error?.message || error?.toString() || "Unknown error";
+    const errorMessage = error instanceof Error ? error.message : String(error);
     console.log("Full error details:", JSON.stringify(error, null, 2));
     
     const lowerError = errorMessage.toLowerCase();

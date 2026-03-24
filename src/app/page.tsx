@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
 import { useInterviewState } from "@/hooks/useInterviewState";
@@ -19,16 +19,87 @@ export default function Home() {
     reset,
   } = useInterviewState();
 
+  const handleInitialMessage = useCallback(async () => {
+    setLoading(true);
+    
+    // Create a placeholder for the model's response
+    const modelMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: "model",
+      content: "",
+      timestamp: Date.now(),
+    };
+    addMessage(modelMessage);
+
+    try {
+      const messages = [{ role: "user", content: "Start the interview" }];
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages,
+          phase: state.phase,
+          role: state.role,
+          seniority: state.seniority,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      // Handle streaming response
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n").filter(line => line.trim());
+
+          for (const line of lines) {
+            if (line.startsWith("data: ") && line !== "data: [DONE]") {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.content) {
+                  fullContent += data.content;
+                  updateLastMessage(fullContent);
+                }
+              } catch {
+                // Ignore JSON parse errors for streaming chunks
+              }
+            }
+          }
+
+          // Update phase based on content
+          if (fullContent.includes("problem") || fullContent.includes("coding")) {
+            if (state.phase === "INTRO") {
+              setPhase("PROBLEM_SOLVING");
+            }
+          }
+        }
+      }
+    } catch (error: unknown) {
+      console.error("Error:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to get response";
+      updateLastMessage(`\n\n[Error: ${errorMsg}]`);
+    } finally {
+      setLoading(false);
+    }
+  }, [state.phase, state.role, state.seniority, addMessage, updateLastMessage, setPhase, setLoading]);
+
   // Start the interview on mount
   useEffect(() => {
     if (state.messages.length === 0) {
       handleInitialMessage();
     }
-  }, []);
-
-  const handleInitialMessage = async () => {
-    await sendToAPI("", true);
-  };
+  }, [state.messages.length, handleInitialMessage]);
 
   const extractRoleAndSeniority = (content: string) => {
     const lower = content.toLowerCase();
@@ -123,9 +194,9 @@ export default function Home() {
           setPhase("PROBLEM_SOLVING");
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error:", error);
-      const errorMsg = error?.message || "Failed to get response";
+      const errorMsg = error instanceof Error ? error.message : "Failed to get response";
       updateLastMessage(`\n\n[Error: ${errorMsg}]`);
     } finally {
       setLoading(false);
